@@ -1,0 +1,23 @@
+{
+    "6547883364_1755450342": {
+        "user_id": "6547883364",
+        "amount": 50.0,
+        "source": "profits",
+        "status": "declined",
+        "created_at": 1755450342
+    },
+    "6547883364_1755552072": {
+        "user_id": "6547883364",
+        "amount": 500.0,
+        "source": "profits",
+        "status": "declined",
+        "created_at": 1755552072
+    },
+    "6547883364_1755552132": {
+        "user_id": "6547883364",
+        "amount": 100.0,
+        "source": "balance",
+        "status": "declined",
+        "created_at": 1755552132
+    }
+}
