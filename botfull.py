@@ -16,6 +16,10 @@ from deep_translator import GoogleTranslator
 from news_viewer import NewsViewer
 from position_calculator import PositionSizeCalculator
 from capital_manager import PositionCapitalManager
+from risk_reward_tool import RiskRewardTool
+from days_to_target_tool import DaysToTargetTool
+from admin_panel import AdminPanel
+from signals_manager import load_signals, save_signals
 
 TOKEN = "7728811663:AAH9K5d2Y6zkOaQqLz5oZXvI3dXQO0Kp9PI"
 ADMIN_CHAT_ID = 6547883364
@@ -29,15 +33,13 @@ bot.set_my_commands([
 
 user_data = {}
 temp_signal = {}
-analyst_data = {}         # لتخزين حسابات المحللين
-analyst_state = {}        # لتتبع خطوات التسجيل
 user_states = {}
 withdraw_requests = []
 admin_state = {}
+packages = {}
 
 # استرجاع البيانات من الملف عند بداية تشغيل البوت
 def load_data():
-    global user_data
     if os.path.exists("user_data.json"):
         with open("user_data.json", "r") as f:
             data = json.load(f)
@@ -46,7 +48,8 @@ def load_data():
                 if info.get("active_package") and info["active_package"].get("start_date"):
                     info["active_package"]["start_date"] = datetime.datetime.fromisoformat(info["active_package"]["start_date"])
                     info["active_package"]["last_profit_date"] = datetime.datetime.fromisoformat(info["active_package"]["last_profit_date"])
-            user_data = {int(k): v for k, v in data.items()}
+            return {int(k): v for k, v in data.items()}
+    return {}
 
 # حفظ البيانات في ملف
 def save_data():
@@ -78,37 +81,9 @@ def save_packages():
 
 # متغير الباقات العالمي
 packages = load_packages()
+user_data = load_data()
 
-def load_signals():
-    global live_signals
-    try:
-        with open("live_signals.json", "r", encoding="utf-8") as f:
-            live_signals = json.load(f)
-    except FileNotFoundError:
-        live_signals = []
-    except Exception as e:
-        print(f"❌ فشل في تحميل التوصيات: {e}")
-        live_signals = []
-
-load_signals()
-
-def save_signals():
-    with open("live_signals.json", "w", encoding="utf-8") as f:
-        json.dump(live_signals, f, ensure_ascii=False, indent=2)
-
-def save_analysts():
-    with open("analysts.json", "w", encoding="utf-8") as f:
-        json.dump(analyst_data, f, ensure_ascii=False, indent=4)
-
-def load_analysts():
-    global analyst_data
-    try:
-        with open("analysts.json", "r", encoding="utf-8") as f:
-            analyst_data = json.load(f)
-    except FileNotFoundError:
-        analyst_data = {}
-
-save_analysts()
+live_signals = load_signals()
 
 def send_welcome(user_id, first_name):
     lang = user_data[user_id].get("language", "ar")
@@ -203,24 +178,6 @@ def send_with_cancel(user_id, text, markup=None):
         markup.add(cancel_btn)
     bot.send_message(user_id, text, reply_markup=markup)
 
-def show_analyst_dashboard(user_id):
-    lang = user_data.get(user_id, {}).get("language", "ar")
-    data = analyst_data.get(user_id, {})
-    
-    name = data.get("name", "غير معروف")
-    followers = len(data.get("followers", []))
-    views = data.get("views", 0)
-    signals = len(data.get("signals", []))
-
-    text = t("analyst_label", lang).format(name=name, signals=signals, views=views, followers=followers)
-
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(t("publish_analysis_btn", lang))
-    markup.add(t("my_analysis_btn", lang))
-    markup.add(t("back_to_main_menu", lang))
-
-    bot.send_message(user_id, text, reply_markup=markup, parse_mode="Markdown")
-
 # دالة لتحويل من دولار إلى العملة المختارة
 def convert_currency(amount_usd, target_currency):
     rate = currency_rates.get(target_currency, 1)
@@ -271,6 +228,13 @@ news = NewsViewer(bot, user_data, t)
 psc = PositionSizeCalculator(bot, user_data, t)
 
 pcm = PositionCapitalManager(bot, user_data, t)
+
+rr_tool = RiskRewardTool(bot, user_data, t)
+
+days_to_target_tool = DaysToTargetTool(bot, user_data, t)
+
+admin = AdminPanel(bot, user_data, admin_state, save_data, ADMIN_CHAT_ID)
+admin.register_handlers()
 
 payment_methods = {
     "فودافون كاش": "01006975034",
@@ -334,27 +298,6 @@ def show_first_package(call):
     user_id = call.message.chat.id
     send_single_package(user_id, 0)
     bot.answer_callback_query(call.id)
-
-@bot.message_handler(commands=['admin'])
-def admin_panel(message):
-    if message.chat.id != ADMIN_CHAT_ID:
-        return
-
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("📊 قائمة المستخدمين", callback_data="admin_users"),
-        types.InlineKeyboardButton("➕ إضافة رصيد", callback_data="admin_add_balance"),
-        types.InlineKeyboardButton("➖ خصم رصيد", callback_data="admin_deduct_balance"),
-        types.InlineKeyboardButton("📤 إرسال رسالة للعميل", callback_data="admin_send_user"),
-        types.InlineKeyboardButton("📢 إرسال رسالة للجميع", callback_data="admin_broadcast"),
-        types.InlineKeyboardButton("➕ إضافة باقة جديدة", callback_data="admin_add_package"),
-        types.InlineKeyboardButton("❌ حذف باقة", callback_data="admin_delete_package")
-    )
-    markup.add(types.InlineKeyboardButton("➕ إضافة توصية", callback_data="admin_add_live_signal"),
-        types.InlineKeyboardButton("🗑️ حذف توصية", callback_data="admin_delete_signal")
-    )
-    
-    bot.send_message(ADMIN_CHAT_ID, "⚙️ لوحة تحكم الإدارة:", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: message.text in [
     t("invest_btn", "ar"), t("invest_btn", "en"), t("invest_btn", "ru")
@@ -673,138 +616,6 @@ def finish_add_signal(call):
             except:
                 continue
 
-@bot.callback_query_handler(func=lambda call: call.data == "admin_delete_signal")
-def admin_delete_signal_callback(call):
-    user_id = call.message.chat.id
-
-    if not live_signals:
-        bot.send_message(user_id, "❌ لا توجد توصيات لحذفها.")
-        return
-
-    markup = types.InlineKeyboardMarkup()
-    for signal in live_signals:
-            btn_text = f"{signal['id']} - {signal['pair']}"
-            markup.add(types.InlineKeyboardButton(btn_text, callback_data=f"delete_signal_{signal['id']}"))
-
-    bot.send_message(user_id, "🗑️ اختر التوصية التي تريد حذفها:", reply_markup=markup)
-    bot.answer_callback_query(call.id)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("delete_signal_"))
-def confirm_delete_signal(call):
-    user_id = call.message.chat.id
-
-    try:
-        signal_id = int(call.data.split("_")[-1])
-        signal_to_delete = next((s for s in live_signals if s["id"] == signal_id), None)
-
-        if not signal_to_delete:
-            bot.answer_callback_query(call.id, text="❌ لم يتم العثور على التوصية.")
-            return
-
-        live_signals.remove(signal_to_delete)
-        save_signals()  # تأكد إن عندك الدالة دي شغالة
-
-        bot.edit_message_text(
-            f"✅ تم حذف التوصية رقم #{signal_id} بنجاح.",
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id
-        )
-
-    except Exception as e:
-        print(f"❌ خطأ أثناء حذف التوصية: {e}")
-        bot.answer_callback_query(call.id, text="❌ حدث خطأ أثناء الحذف.")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_") or call.data.startswith("reject_"))
-def handle_admin_confirmation(call):
-    parts = call.data.split("_")
-    action = parts[0]  # "confirm" أو "reject"
-    user_id = int(parts[1])
-    payment_type = parts[2] if len(parts) > 2 else "normal"
-
-    if user_id not in user_data:
-        return
-
-    lang = user_data[user_id].get("language", "ar")
-
-    if action == "confirm":
-        if payment_type == "fund":
-            amount = user_data[user_id].get("fund_amount", 0)
-            user_data[user_id]["balance"] += amount
-            user_data[user_id].pop("awaiting_fund_payment", None)
-            user_data[user_id].pop("fund_amount", None)
-            save_data()
-
-            bot.send_message(user_id, f"✅ تم تأكيد الإيداع! تم إضافة *{amount}$* إلى رصيدك.", parse_mode="Markdown")
-
-        elif payment_type == "custom":
-            investment = user_data[user_id].get("custom_investment")
-            if not investment:
-                bot.send_message(user_id, "❌ لا يوجد مبلغ استثمار مخصص.")
-                return
-
-            amount = investment.get("amount", 0)
-            user_data[user_id]["balance"] += amount
-            user_data[user_id]["active_package"] = {
-                "amount": amount,
-                "start_date": datetime.datetime.now(),
-                "last_profit_date": datetime.datetime.now(),
-                "days_passed": 0,
-                "active": True
-            }
-            user_data[user_id]["profits"] = 0
-            investment["confirmed"] = True
-
-            # حذف أي باقة مختارة قديمة
-            user_data[user_id].pop("selected_package", None)
-            save_data()
-
-            bot.send_message(user_id, f"✅ تم تأكيد الدفع وتفعيل باقتك الاستثمارية بمبلغ *{amount}$*!\n💰 أرباحك هتبدأ تتجمع يوميًا، والسحب متاح بعد 7 أيام.", parse_mode="Markdown")
-
-        else:  # normal
-            selected_package = user_data[user_id].get("selected_package")
-            if not selected_package or selected_package not in packages:
-                bot.send_message(user_id, t("no_package_selected", lang))
-                return
-
-            amount = packages[selected_package]["amount"]
-            user_data[user_id]["balance"] += amount
-            user_data[user_id]["active_package"] = {
-                "amount": amount,
-                "start_date": datetime.datetime.now(),
-                "last_profit_date": datetime.datetime.now(),
-                "days_passed": 0,
-                "active": True
-            }
-            user_data[user_id]["profits"] = 0
-            save_data()
-
-            referrer_id = user_data[user_id].get("ref_by")
-            if referrer_id and not user_data[user_id].get("ref_bonus_claimed", False):
-                user_data[referrer_id]["balance"] += 5
-                user_data[user_id]["ref_bonus_claimed"] = True
-                bot.send_message(referrer_id, t("referral_activated", lang))
-
-            bot.send_message(user_id, f"✅ تم تفعيل باقتك الاستثمارية: *{selected_package}*!\n💰 أرباحك هتبدأ تتجمع يوميًا، والسحب متاح بعد 7 أيام.", parse_mode="Markdown")
-
-    else:  # رفض العملية
-        if payment_type == "fund":
-            bot.send_message(user_id, "❌ تم رفض عملية الشحن.")
-            user_data[user_id].pop("awaiting_fund_payment", None)
-            user_data[user_id].pop("fund_amount", None)
-
-        elif payment_type == "custom":
-            bot.send_message(user_id, "❌ تم رفض الاستثمار المخصص.")
-            user_data[user_id].pop("custom_investment", None)
-            user_data[user_id]["awaiting_custom_amount"] = False
-
-        else:  # normal
-            bot.send_message(user_id, t("payment_rejected", lang))
-            user_data[user_id].pop("awaiting_payment", None)
-
-        save_data()
-
-    bot.answer_callback_query(call.id)
-    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
 
 @bot.message_handler(func=lambda message: message.text in [
     t("balance_btn", "ar"), t("balance_btn", "en"), t("balance_btn", "ru")
@@ -838,55 +649,6 @@ def my_balance(message):
 https://t.me/{bot.get_me().username}?start={ref_code}"""
 
     bot.send_message(user_id, text)
-
-@bot.message_handler(func=lambda message: message.text in [
-    t("analysis_center_btn", "ar"),
-    t("analysis_center_btn", "en"),
-    t("analysis_center_btn", "ru")
-])
-def analysis_center_menu(message):
-    user_id = message.chat.id
-    lang = user_data.get(user_id, {}).get("language", "ar")
-
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(t("latest_analyses_btn", lang), t("my_favorites_btn", lang))
-    markup.add(t("my_following_btn", lang), t("analysis_explain_btn", lang))
-    markup.add(t("back_to_main_menu", lang))
-
-    bot.send_message(user_id, t("analysis_section_welcome", lang), parse_mode="Markdown", reply_markup=markup)
-
-@bot.message_handler(func=lambda message: message.text == t("analyst_mode_btn", user_data.get(message.chat.id, {}).get("language", "ar")))
-def enter_analyst_mode(message):
-    user_id = message.chat.id
-    lang = user_data.get(user_id, {}).get("language", "ar")
-
-    analyst = analyst_data.get(user_id)
-    if analyst:
-        show_analyst_dashboard(user_id)
-    else:
-        bot.send_message(user_id, t("analyst_intro", lang), parse_mode="Markdown")
-        analyst_state[user_id] = "awaiting_name"
-
-@bot.message_handler(func=lambda message: analyst_state.get(message.chat.id) == "awaiting_name")
-def handle_analyst_name(message):
-    user_id = message.chat.id
-    lang = user_data.get(user_id, {}).get("language", "ar")
-    display_name = message.text.strip()
-
-    if len(display_name) < 2:
-        bot.send_message(user_id, t("analyst_name_short", lang))
-        return
-
-    analyst_data[user_id] = {
-        "name": display_name,
-        "followers": [],
-        "views": 0,
-        "signals": []
-    }
-    analyst_state.pop(user_id, None)
-
-    bot.send_message(user_id, t("analyst_created", lang).format(name=display_name), parse_mode="Markdown")
-    show_analyst_dashboard(user_id)
 
 @bot.message_handler(func=lambda message: message.text == t("invest_btn", user_data.get(message.chat.id, {}).get("language", "ar")))
 def invest_options(message):
@@ -942,205 +704,38 @@ def package_status(message):
 """
     bot.send_message(user_id, text, parse_mode="Markdown")
 
-from telebot.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
-import time
-
-# =====  بدء السحب  =====
-@bot.message_handler(func=lambda m: m.text in [
+@bot.message_handler(func=lambda message: message.text in [
     t("withdraw_btn", "ar"), t("withdraw_btn", "en"), t("withdraw_btn", "ru")
 ])
 def withdraw(message):
     user_id = message.chat.id
-    lang = get_user_lang(user_id)
+    user = user_data.get(user_id, {})
+    profits = user.get("profits", 0)
+    package = user.get("active_package")
 
-    # أزرار المصدر
-    kb = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    btn_bal = "💰 " + t("withdraw_from_balance_btn", lang)
-    btn_pro = "📦 " + t("withdraw_from_packages_btn", lang)
-    btn_cancel = t("back_to_main_menu", lang)
-    kb.add(btn_bal, btn_pro)
-    kb.add(btn_cancel)
-
-    bot.send_message(user_id, t("choose_withdraw_source", lang), reply_markup=kb)
-    user_states[str(user_id)] = {"action": "choose_source", "btn_bal": btn_bal, "btn_pro": btn_pro, "btn_cancel": btn_cancel}
-
-
-# =====  اختيار المصدر  =====
-@bot.message_handler(func=lambda m: user_states.get(str(m.chat.id), {}).get("action") == "choose_source")
-def process_withdraw_source(message):
-    user_id = message.chat.id
-    sid = str(user_id)
-    lang = get_user_lang(user_id)
-    state = user_states.get(sid, {})
-    text = (message.text or "").strip()
-
-    if text == state.get("btn_cancel", t("cancel", lang)):
-        try:
-            bot.send_message(user_id, t("withdraw_cancelled", lang), reply_markup=main_menu(lang))
-        except:
-            bot.send_message(user_id, t("withdraw_cancelled", lang))
-        user_states.pop(sid, None)
+    if not package or not package.get("active"):
+        lang = user.get("language", "ar")
+        bot.send_message(user_id, t("no_active_package", lang))
         return
 
-    # تحديد المصدر
-    if text == state.get("btn_bal"):
-        source_key = "balance"
-    elif text == state.get("btn_pro"):
-        source_key = "profits"
+    start_date = package.get("start_date")
+    days_since_start = (datetime.datetime.now().date() - start_date.date()).days
+
+    if days_since_start < 7:
+        lang = user.get("language", "ar")
+        bot.send_message(user_id, t("withdraw_too_early", lang).format(days=7 - days_since_start))
+        return
+
+    if profits > 0:
+        lang = user.get("language", "ar")
+        curr = user.get("currency", "USD")
+        symbol = currency_symbols.get(curr, "$")
+        msg = t("withdraw_requested", lang).format(amount=convert_currency(profits, curr), symbol=symbol)
+        bot.send_message(user_id, msg)
+        bot.send_message(ADMIN_CHAT_ID, f"💸 طلب سحب من ID `{user_id}` بقيمة {profits}$", parse_mode="Markdown")
     else:
-        bot.send_message(user_id, t("invalid_option", lang))
-        return
-
-    user_doc, key = get_user_doc(user_id)
-    available = float(user_doc.get(source_key, 0.0))
-
-    if available < MIN_WITHDRAW:
-        bot.send_message(user_id, t("withdraw_minimum", lang).format(MIN_WITHDRAW))
-        user_states.pop(sid, None)
-        return
-
-    user_states[sid] = {"action": "enter_amount", "source": source_key, "available": available}
-    bot.send_message(
-        user_id,
-        t("enter_withdraw_amount", lang).format(available=available)
-    )
-
-
-# =====  إدخال المبلغ  =====
-@bot.message_handler(func=lambda m: user_states.get(str(m.chat.id), {}).get("action") == "enter_amount")
-def process_withdraw_amount(message):
-    user_id = message.chat.id
-    sid = str(user_id)
-    lang = get_user_lang(user_id)
-    state = user_states.get(sid, {})
-
-    # تحقق من المبلغ
-    try:
-        amount = float((message.text or "").strip())
-    except ValueError:
-        bot.send_message(user_id, t("invalid_amount", lang))
-        return
-
-    if amount < MIN_WITHDRAW:
-        bot.send_message(user_id, t("withdraw_minimum", lang).format(MIN_WITHDRAW))
-        return
-
-    available = float(state.get("available", 0.0))
-    if amount > available:
-        bot.send_message(user_id, t("amount_out_of_range", lang).format(min=MIN_WITHDRAW, max=available))
-        return
-
-    # إنشاء طلب بدون خصم الآن (الخصم يتم عند الموافقة فقط)
-    requests = load_json("withdraw_requests.json")
-    if not isinstance(requests, dict):
-        requests = {}
-    req_id = f"{sid}_{int(time.time())}"
-
-    requests[req_id] = {
-        "user_id": sid,
-        "amount": amount,
-        "source": state.get("source", "balance"),
-        "status": "pending",
-        "created_at": int(time.time())
-    }
-    save_json("withdraw_requests.json", requests)
-
-    # إشعار المستخدم
-    try:
-        bot.send_message(user_id, t("withdraw_under_review", lang), reply_markup=main_menu(lang))
-    except:
-        bot.send_message(user_id, t("withdraw_under_review", lang))
-
-    # إشعار للإدمن مع أزرار قبول/رفض
-    mk = InlineKeyboardMarkup()
-    mk.add(
-        InlineKeyboardButton("✅ قبول", callback_data=f"wd:approve:{req_id}"),
-        InlineKeyboardButton("❌ رفض", callback_data=f"wd:decline:{req_id}")
-    )
-    # لو ADMIN_CHAT_ID قناة/جروب تأكد إن البوت Admin هناك وأنه يعرف يرسل
-    bot.send_message(
-        ADMIN_CHAT_ID,
-        f"💸 طلب سحب جديد\n"
-        f"👤 ID: {sid}\n"
-        f"💵 Amount: {amount}$\n"
-        f"📂 Source: {state.get('source')}",
-        reply_markup=mk
-    )
-
-    # تنظيف الحالة
-    user_states.pop(sid, None)
-
-
-# =====  موافقة/رفض الإدارة  =====
-@bot.callback_query_handler(func=lambda c: c.data.startswith("wd:"))
-def handle_withdraw_admin(call):
-    try:
-        _, action, req_id = call.data.split(":", 2)
-    except Exception:
-        bot.answer_callback_query(call.id, "Bad data")
-        return
-
-    requests = load_json("withdraw_requests.json")
-    if not isinstance(requests, dict):
-        requests = {}
-
-    if req_id not in requests:
-        bot.answer_callback_query(call.id, "❌ الطلب غير موجود")
-        return
-
-    req = requests[req_id]
-    user_id = req["user_id"]
-    amount = float(req["amount"])
-    source = req["source"]
-    lang = get_user_lang(user_id)
-
-    if action == "approve":
-        # خصم فعلي الآن
-        user_doc, key = get_user_doc(user_id)
-        current_val = float(user_doc.get(source, 0.0))
-        # ضمان عدم السالب
-        if amount > current_val:
-            # لو رصيده اتغير من وقت الطلب
-            bot.answer_callback_query(call.id, "⚠️ رصيد المستخدم لا يكفي الآن")
-            return
-
-        user_doc[source] = round(current_val - amount, 2)
-        save_json("user_data.json", user_data)
-
-        req["status"] = "approved"
-        save_json("withdraw_requests.json", requests)
-
-        bot.send_message(user_id, t("withdraw_approved", lang).format(amount=amount))
-        try:
-            bot.edit_message_text(
-                f"✅Approved: {req_id}\nUser: {user_id}\nAmount: {amount}$\nSource: {source}",
-                chat_id=call.message.chat.id, message_id=call.message.message_id
-            )
-        except:
-            pass
-        bot.answer_callback_query(call.id, "✅ Done")
-
-    elif action == "decline":
-        req["status"] = "declined"
-        save_json("withdraw_requests.json", requests)
-
-        # رسالة للمستخدم مع زر تواصل
-        contact_btn = InlineKeyboardMarkup()
-        contact_btn.add(InlineKeyboardButton(t("contact_admin_btn", lang), url="https://t.me/ahmed_afifi_trader"))
-
-        bot.send_message(
-            user_id,
-            t("withdraw_declined", lang).format(amount=amount, source=source),
-            reply_markup=contact_btn
-        )
-        try:
-            bot.edit_message_text(
-                f"❌Declined: {req_id}\nUser: {user_id}\nAmount: {amount}$\nSource: {source}",
-                chat_id=call.message.chat.id, message_id=call.message.message_id
-            )
-        except:
-            pass
-        bot.answer_callback_query(call.id, "❌ Declined")
+        lang = user.get("language", "ar")
+        bot.send_message(user_id, t("no_profits_to_withdraw", lang))
 
 @bot.message_handler(func=lambda message: message.text == t("deposit_btn", user_data.get(message.chat.id, {}).get("language", "ar")))
 def ask_fund_amount(message):
@@ -1182,6 +777,35 @@ def open_trading_assistant(message):
     markup.add(t("back_to_main_menu", lang))
 
     bot.send_message(user_id, t("choose_trading_tool", lang), reply_markup=markup)
+
+@bot.message_handler(func=lambda message: message.text in [
+    "📅 " + t("tool_days_to_target", "ar"),
+    "📅 " + t("tool_days_to_target", "en"),
+    "📅 " + t("tool_days_to_target", "ru"),
+])
+def handle_days_to_target(message):
+    days_to_target_tool.open_form(message)
+
+@bot.message_handler(func=lambda message: message.chat.id in days_to_target_tool.form_state)
+def handle_days_to_target_input(message):
+    days_to_target_tool.process_input(message)
+
+@bot.message_handler(func=lambda m: m.text in [
+    "📏 " + t("tool_risk_reward", "ar"),
+    "📏 " + t("tool_risk_reward", "en"),
+    "📏 " + t("tool_risk_reward", "ru"),
+])
+def open_risk_reward_tool(message):
+    rr_tool.open_form(message)
+
+@bot.message_handler(func=lambda m: m.chat.id in getattr(rr_tool, "form_state", {}))
+def handle_risk_reward_inputs(message):
+    rr_tool.process_input(message)
+
+@bot.callback_query_handler(func=lambda c: c.data == "tool_risk_reward")
+def open_risk_reward_from_callback(call):
+    rr_tool.open_form(call.message)
+    bot.answer_callback_query(call.id)
 
 @bot.message_handler(func=lambda m: m.text and "🕒" in m.text)
 def market_hours(message):
@@ -1378,7 +1002,6 @@ def trading_section(message):
         t("trading_active_signals_btn", lang),
     )
     markup.add(
-        t("trading_stats_btn", lang),
         t("trading_channel_btn", lang)
     )
     markup.add(
@@ -1388,6 +1011,40 @@ def trading_section(message):
     markup.add(t("back_to_main_menu", lang))
 
     bot.send_message(user_id, t("trading_section_welcome", lang), reply_markup=markup)
+
+@bot.message_handler(func=lambda message: message.text in ["❓ شرح قسم التداول", "❓ Trading Guide", "❓ О разделе трейдинга"])
+def trading_help(message):
+    user_id = message.chat.id
+    lang = user_data.get(user_id, {}).get("language", "ar")
+
+    help_text = {
+        "ar": (
+            "📘 *شرح قسم التداول:*\n\n"
+            "🔹 *التوصيات الجارية*: هنا بتلاقي الفرص المفتوحة مع نقاط الدخول والخروج.\n"
+            "🔹 *إدارة رأس المال*: إزاي تحدد حجم الصفقة المناسب لرصيدك.\n"
+            "🔹 *معدل المخاطرة*: ننصحك متخاطرش بأكتر من 20% من رأس المال في الصفقة.\n"
+            "🔹 *توضيح الإشارات*: كل توصية بيكون معاها *هدف* و *وقف خسارة*.\n\n"
+            "⚡️ هدفنا نوفرلك قرارات تداول أوضح وأسهل."
+        ),
+        "en": (
+            "📘 *Trading Section Guide:*\n\n"
+            "🔹 *Active Signals*: Shows open opportunities with entry/exit points.\n"
+            "🔹 *Capital Management*: How to calculate the right lot size.\n"
+            "🔹 *Risk Ratio*: Never risk more than 20% per trade.\n"
+            "🔹 *Signal Explanation*: Each signal includes *Take Profit* and *Stop Loss*.\n\n"
+            "⚡️ Our goal is to make trading decisions clearer and easier."
+        ),
+        "ru": (
+            "📘 *Раздел торговли:*\n\n"
+            "🔹 *Активные сигналы*: Открытые возможности с точками входа/выхода.\n"
+            "🔹 *Управление капиталом*: Как рассчитать правильный размер сделки.\n"
+            "🔹 *Риск*: Не рискуйте более 20% капитала на сделку.\n"
+            "🔹 *Сигналы*: Каждый сигнал содержит *Take Profit* и *Stop Loss*.\n\n"
+            "⚡️ Наша цель — сделать торговлю проще и понятнее."
+        )
+    }
+
+    bot.send_message(user_id, help_text[lang], parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: message.text in ["🔙 رجوع للقائمة الرئيسية", "🔙 Back to Main Menu", "🔙 Назад в главное меню"])
 def back_to_main_menu(message):
@@ -1464,77 +1121,6 @@ def set_currency(call):
 
     bot.answer_callback_query(call.id)
 
-@bot.message_handler(func=lambda message: message.chat.id == ADMIN_CHAT_ID and ADMIN_CHAT_ID in admin_state)
-def handle_admin_inputs(message):
-    state = admin_state.get(ADMIN_CHAT_ID)
-    text = message.text.strip()
-
-    if state == "awaiting_add_balance":
-        try:
-            uid, amount = text.split()
-            uid = int(uid)
-            amount = float(amount)
-            user_data[uid]["balance"] += amount
-            bot.send_message(ADMIN_CHAT_ID, f"✅ تم إضافة {amount}$ إلى حساب {uid}.")
-            bot.send_message(uid, f"💰 تم إضافة {amount}$ إلى رصيدك من قبل الإدارة.")
-            save_data()
-        except:
-            bot.send_message(ADMIN_CHAT_ID, "❌ تنسيق غير صحيح.")
-
-    elif state == "awaiting_deduct_balance":
-        try:
-            uid, amount = text.split()
-            uid = int(uid)
-            amount = float(amount)
-            user_data[uid]["balance"] -= amount
-            bot.send_message(ADMIN_CHAT_ID, f"✅ تم خصم {amount}$ من حساب {uid}.")
-            bot.send_message(uid, f"💰 تم خصم {amount}$ من رصيدك من قبل الإدارة.")
-            save_data()
-        except:
-            bot.send_message(ADMIN_CHAT_ID, "❌ تنسيق غير صحيح.")
-
-    elif state == "awaiting_send_user":
-        try:
-            uid, msg = text.split(" ", 1)
-            uid = int(uid)
-            bot.send_message(uid, f"📬 رسالة من الإدارة:\n{msg}")
-            bot.send_message(ADMIN_CHAT_ID, "✅ تم إرسال الرسالة.")
-            save_data()
-        except:
-            bot.send_message(ADMIN_CHAT_ID, "❌ تنسيق غير صحيح.")
-
-    elif state == "awaiting_broadcast":
-        count = 0
-        for uid in user_data.keys():
-            try:
-                bot.send_message(uid, f"📢 إعلان إداري:\n{text}")
-                count += 1
-            except:
-                continue
-        bot.send_message(ADMIN_CHAT_ID, f"✅ تم إرسال الرسالة إلى {count} مستخدم.")
-
-    elif state == "awaiting_add_package":
-        try:
-            name, amount, profit = text.split()
-            amount = int(amount)
-            profit = int(profit)
-            packages[name] = {"amount": amount, "profit": profit}
-            save_packages()
-            bot.send_message(ADMIN_CHAT_ID, f"✅ تم إضافة الباقة: {name}")
-            save_data()
-        except:
-            bot.send_message(ADMIN_CHAT_ID, "❌ تنسيق غير صحيح.")
-
-    elif state == "awaiting_delete_package":
-        if text in packages:
-            del packages[text]
-            save_packages()
-            bot.send_message(ADMIN_CHAT_ID, f"✅ تم حذف الباقة: {text}")
-        else:
-            bot.send_message(ADMIN_CHAT_ID, "❌ لم يتم العثور على باقة بهذا الاسم.")
-
-    admin_state.pop(ADMIN_CHAT_ID, None)
-
 @bot.message_handler(content_types=['photo'])
 def handle_payment_photo(message):
     user_id = message.chat.id
@@ -1592,10 +1178,12 @@ def handle_payment_text(message):
 
     # تجاهل أزرار القائمة الرئيسية
     if text in [
-        t("packages_btn", lang), t("deposit_btn", lang), t("withdraw_btn", lang),
+        t("packages_btn", lang), t("withdraw_btn", lang),
         t("balance_btn", lang), t("package_status_btn", lang), t("referral_btn", lang),
         t("support_btn", lang), t("trial_btn", lang), t("change_currency_btn", lang),
-        t("change_lang_btn", lang)
+        t("change_lang_btn", lang),
+        t("analysis_center_btn", lang), t("analyst_mode_btn", lang), t("deposit_btn", lang), t("invest_btn", lang),
+        t("trading_btn", lang), t("trading_assistant_btn", lang)
     ]:
         return
 
