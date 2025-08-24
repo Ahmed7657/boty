@@ -22,7 +22,7 @@ from capital_manager import PositionCapitalManager
 from risk_reward_tool import RiskRewardTool
 from days_to_target_tool import DaysToTargetTool
 
-TOKEN = "8382677696:AAFoNsjJJ1oDlZsDMXL1BvRt5nbPWuoEv1E"
+TOKEN = "7728811663:AAH9K5d2Y6zkOaQqLz5oZXvI3dXQO0Kp9PI"
 ADMIN_CHAT_ID = 6547883364
 API_KEY = "089wRXsDWUqMEP0jXUTUysIFMCtwHkak43WmMDZS"  # ← حط مفتاحك هنا
 
