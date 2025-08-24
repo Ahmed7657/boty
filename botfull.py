@@ -15,13 +15,14 @@ from telebot.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeybo
 from deep_translator import GoogleTranslator
 from news_viewer import NewsViewer
 from position_calculator import PositionSizeCalculator
+
+
+from position_calculator import PositionSizeCalculator
 from capital_manager import PositionCapitalManager
 from risk_reward_tool import RiskRewardTool
 from days_to_target_tool import DaysToTargetTool
-from admin_panel import AdminPanel
-from signals_manager import load_signals, save_signals
 
-TOKEN = "7728811663:AAH9K5d2Y6zkOaQqLz5oZXvI3dXQO0Kp9PI"
+TOKEN = "8382677696:AAFoNsjJJ1oDlZsDMXL1BvRt5nbPWuoEv1E"
 ADMIN_CHAT_ID = 6547883364
 API_KEY = "089wRXsDWUqMEP0jXUTUysIFMCtwHkak43WmMDZS"  # ← حط مفتاحك هنا
 
@@ -36,10 +37,11 @@ temp_signal = {}
 user_states = {}
 withdraw_requests = []
 admin_state = {}
-packages = {}
+admin_temp = {}
 
 # استرجاع البيانات من الملف عند بداية تشغيل البوت
 def load_data():
+    global user_data
     if os.path.exists("user_data.json"):
         with open("user_data.json", "r") as f:
             data = json.load(f)
@@ -48,8 +50,7 @@ def load_data():
                 if info.get("active_package") and info["active_package"].get("start_date"):
                     info["active_package"]["start_date"] = datetime.datetime.fromisoformat(info["active_package"]["start_date"])
                     info["active_package"]["last_profit_date"] = datetime.datetime.fromisoformat(info["active_package"]["last_profit_date"])
-            return {int(k): v for k, v in data.items()}
-    return {}
+            user_data = {int(k): v for k, v in data.items()}
 
 # حفظ البيانات في ملف
 def save_data():
@@ -81,9 +82,45 @@ def save_packages():
 
 # متغير الباقات العالمي
 packages = load_packages()
-user_data = load_data()
 
-live_signals = load_signals()
+def load_signals():
+    global live_signals
+    try:
+        with open("live_signals.json", "r", encoding="utf-8") as f:
+            live_signals = json.load(f)
+    except FileNotFoundError:
+        live_signals = []
+    except Exception as e:
+        print(f"❌ فشل في تحميل التوصيات: {e}")
+        live_signals = []
+
+load_signals()
+
+def save_signals():
+    with open("live_signals.json", "w", encoding="utf-8") as f:
+        json.dump(live_signals, f, ensure_ascii=False, indent=2)
+
+def tg_int(x):
+    """حوّل أي قيمة رقمية/نصية لint بشكل آمن."""
+    return int(str(x).strip())
+
+def chunk_text(text, size=4096):
+    for i in range(0, len(text), size):
+        yield text[i:i+size]
+
+def send_safe(chat_id, text):
+    """يرسل مع تجزئة لو الرسالة أطول من 4096، ويعيد (True/False, error)."""
+    try:
+        cid = tg_int(chat_id)
+        if len(text) <= 4096:
+            bot.send_message(cid, text)
+        else:
+            for part in chunk_text(text):
+                bot.send_message(cid, part)
+                time.sleep(0.05)
+        return True, None
+    except Exception as e:
+        return False, e
 
 def send_welcome(user_id, first_name):
     lang = user_data[user_id].get("language", "ar")
@@ -101,6 +138,7 @@ def send_welcome(user_id, first_name):
 
     # اظهار القائمة
     send_main_menu(user_id)
+
 
 def send_main_menu(user_id):
     lang = user_data.get(user_id, {}).get("language", "ar")
@@ -141,9 +179,6 @@ currency_rates = {
     "USDT": 1
 }
 
-# حد السحب الأدنى
-MIN_WITHDRAW = 50
-
 def translate_text(text, target="ar"):
     try:
         return GoogleTranslator(source="auto", target=target).translate(text)
@@ -177,6 +212,24 @@ def send_with_cancel(user_id, text, markup=None):
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         markup.add(cancel_btn)
     bot.send_message(user_id, text, reply_markup=markup)
+
+def show_analyst_dashboard(user_id):
+    lang = user_data.get(user_id, {}).get("language", "ar")
+    data = analyst_data.get(user_id, {})
+    
+    name = data.get("name", "غير معروف")
+    followers = len(data.get("followers", []))
+    views = data.get("views", 0)
+    signals = len(data.get("signals", []))
+
+    text = t("analyst_label", lang).format(name=name, signals=signals, views=views, followers=followers)
+
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(t("publish_analysis_btn", lang))
+    markup.add(t("my_analysis_btn", lang))
+    markup.add(t("back_to_main_menu", lang))
+
+    bot.send_message(user_id, text, reply_markup=markup, parse_mode="Markdown")
 
 # دالة لتحويل من دولار إلى العملة المختارة
 def convert_currency(amount_usd, target_currency):
@@ -228,13 +281,8 @@ news = NewsViewer(bot, user_data, t)
 psc = PositionSizeCalculator(bot, user_data, t)
 
 pcm = PositionCapitalManager(bot, user_data, t)
-
 rr_tool = RiskRewardTool(bot, user_data, t)
-
 days_to_target_tool = DaysToTargetTool(bot, user_data, t)
-
-admin = AdminPanel(bot, user_data, admin_state, save_data, ADMIN_CHAT_ID)
-admin.register_handlers()
 
 payment_methods = {
     "فودافون كاش": "01006975034",
@@ -298,6 +346,27 @@ def show_first_package(call):
     user_id = call.message.chat.id
     send_single_package(user_id, 0)
     bot.answer_callback_query(call.id)
+
+@bot.message_handler(commands=['admin'])
+def admin_panel(message):
+    if message.chat.id != ADMIN_CHAT_ID:
+        return
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📊 قائمة المستخدمين", callback_data="admin_users"),
+        types.InlineKeyboardButton("➕ إضافة رصيد", callback_data="admin_add_balance"),
+        types.InlineKeyboardButton("➖ خصم رصيد", callback_data="admin_deduct_balance"),
+        types.InlineKeyboardButton("📤 إرسال رسالة للعميل", callback_data="admin_send_user"),
+        types.InlineKeyboardButton("📢 إرسال رسالة للجميع", callback_data="admin_broadcast"),
+        types.InlineKeyboardButton("➕ إضافة باقة جديدة", callback_data="admin_add_package"),
+        types.InlineKeyboardButton("❌ حذف باقة", callback_data="admin_delete_package")
+    )
+    markup.add(types.InlineKeyboardButton("➕ إضافة توصية", callback_data="admin_add_live_signal"),
+        types.InlineKeyboardButton("🗑️ حذف توصية", callback_data="admin_delete_signal")
+    )
+    
+    bot.send_message(ADMIN_CHAT_ID, "⚙️ لوحة تحكم الإدارة:", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: message.text in [
     t("invest_btn", "ar"), t("invest_btn", "en"), t("invest_btn", "ru")
@@ -616,6 +685,138 @@ def finish_add_signal(call):
             except:
                 continue
 
+@bot.callback_query_handler(func=lambda call: call.data == "admin_delete_signal")
+def admin_delete_signal_callback(call):
+    user_id = call.message.chat.id
+
+    if not live_signals:
+        bot.send_message(user_id, "❌ لا توجد توصيات لحذفها.")
+        return
+
+    markup = types.InlineKeyboardMarkup()
+    for signal in live_signals:
+            btn_text = f"{signal['id']} - {signal['pair']}"
+            markup.add(types.InlineKeyboardButton(btn_text, callback_data=f"delete_signal_{signal['id']}"))
+
+    bot.send_message(user_id, "🗑️ اختر التوصية التي تريد حذفها:", reply_markup=markup)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("delete_signal_"))
+def confirm_delete_signal(call):
+    user_id = call.message.chat.id
+
+    try:
+        signal_id = int(call.data.split("_")[-1])
+        signal_to_delete = next((s for s in live_signals if s["id"] == signal_id), None)
+
+        if not signal_to_delete:
+            bot.answer_callback_query(call.id, text="❌ لم يتم العثور على التوصية.")
+            return
+
+        live_signals.remove(signal_to_delete)
+        save_signals()  # تأكد إن عندك الدالة دي شغالة
+
+        bot.edit_message_text(
+            f"✅ تم حذف التوصية رقم #{signal_id} بنجاح.",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id
+        )
+
+    except Exception as e:
+        print(f"❌ خطأ أثناء حذف التوصية: {e}")
+        bot.answer_callback_query(call.id, text="❌ حدث خطأ أثناء الحذف.")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_") or call.data.startswith("reject_"))
+def handle_admin_confirmation(call):
+    parts = call.data.split("_")
+    action = parts[0]  # "confirm" أو "reject"
+    user_id = int(parts[1])
+    payment_type = parts[2] if len(parts) > 2 else "normal"
+
+    if user_id not in user_data:
+        return
+
+    lang = user_data[user_id].get("language", "ar")
+
+    if action == "confirm":
+        if payment_type == "fund":
+            amount = user_data[user_id].get("fund_amount", 0)
+            user_data[user_id]["balance"] += amount
+            user_data[user_id].pop("awaiting_fund_payment", None)
+            user_data[user_id].pop("fund_amount", None)
+            save_data()
+
+            bot.send_message(user_id, f"✅ تم تأكيد الإيداع! تم إضافة *{amount}$* إلى رصيدك.", parse_mode="Markdown")
+
+        elif payment_type == "custom":
+            investment = user_data[user_id].get("custom_investment")
+            if not investment:
+                bot.send_message(user_id, "❌ لا يوجد مبلغ استثمار مخصص.")
+                return
+
+            amount = investment.get("amount", 0)
+            user_data[user_id]["balance"] += amount
+            user_data[user_id]["active_package"] = {
+                "amount": amount,
+                "start_date": datetime.datetime.now(),
+                "last_profit_date": datetime.datetime.now(),
+                "days_passed": 0,
+                "active": True
+            }
+            user_data[user_id]["profits"] = 0
+            investment["confirmed"] = True
+
+            # حذف أي باقة مختارة قديمة
+            user_data[user_id].pop("selected_package", None)
+            save_data()
+
+            bot.send_message(user_id, f"✅ تم تأكيد الدفع وتفعيل باقتك الاستثمارية بمبلغ *{amount}$*!\n💰 أرباحك هتبدأ تتجمع يوميًا، والسحب متاح بعد 7 أيام.", parse_mode="Markdown")
+
+        else:  # normal
+            selected_package = user_data[user_id].get("selected_package")
+            if not selected_package or selected_package not in packages:
+                bot.send_message(user_id, t("no_package_selected", lang))
+                return
+
+            amount = packages[selected_package]["amount"]
+            user_data[user_id]["balance"] += amount
+            user_data[user_id]["active_package"] = {
+                "amount": amount,
+                "start_date": datetime.datetime.now(),
+                "last_profit_date": datetime.datetime.now(),
+                "days_passed": 0,
+                "active": True
+            }
+            user_data[user_id]["profits"] = 0
+            save_data()
+
+            referrer_id = user_data[user_id].get("ref_by")
+            if referrer_id and not user_data[user_id].get("ref_bonus_claimed", False):
+                user_data[referrer_id]["balance"] += 5
+                user_data[user_id]["ref_bonus_claimed"] = True
+                bot.send_message(referrer_id, t("referral_activated", lang))
+
+            bot.send_message(user_id, f"✅ تم تفعيل باقتك الاستثمارية: *{selected_package}*!\n💰 أرباحك هتبدأ تتجمع يوميًا، والسحب متاح بعد 7 أيام.", parse_mode="Markdown")
+
+    else:  # رفض العملية
+        if payment_type == "fund":
+            bot.send_message(user_id, "❌ تم رفض عملية الشحن.")
+            user_data[user_id].pop("awaiting_fund_payment", None)
+            user_data[user_id].pop("fund_amount", None)
+
+        elif payment_type == "custom":
+            bot.send_message(user_id, "❌ تم رفض الاستثمار المخصص.")
+            user_data[user_id].pop("custom_investment", None)
+            user_data[user_id]["awaiting_custom_amount"] = False
+
+        else:  # normal
+            bot.send_message(user_id, t("payment_rejected", lang))
+            user_data[user_id].pop("awaiting_payment", None)
+
+        save_data()
+
+    bot.answer_callback_query(call.id)
+    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
 
 @bot.message_handler(func=lambda message: message.text in [
     t("balance_btn", "ar"), t("balance_btn", "en"), t("balance_btn", "ru")
@@ -757,6 +958,14 @@ def referral(message):
     bot.send_message(user_id, t("send_referral_link", lang).format(link=link))
 
 @bot.message_handler(func=lambda message: message.text in [
+    t("analysis_center_btn", "ar"), t("analysis_center_btn", "en"), t("analysis_center_btn", "ru"),
+    t("analyst_mode_btn", "ar"), t("analyst_mode_btn", "en"), t("analyst_mode_btn", "ru")
+])
+def handle_maintenance_buttons(message):
+    lang = get_user_lang(message.chat.id)  # الدالة دي بتحدد لغة المستخدم
+    bot.reply_to(message, t("under_maintenance", lang))
+
+@bot.message_handler(func=lambda message: message.text in [
     t("trading_assistant_btn", "ar"), t("trading_assistant_btn", "en"), t("trading_assistant_btn", "ru")
 ])
 def open_trading_assistant(message):
@@ -806,6 +1015,23 @@ def handle_risk_reward_inputs(message):
 def open_risk_reward_from_callback(call):
     rr_tool.open_form(call.message)
     bot.answer_callback_query(call.id)
+
+@bot.message_handler(func=lambda m: m.text and "🛡️" in m.text)
+def open_capital_mng(message):
+    pcm.open_menu(message)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith(("cm_",)))
+def handle_cm_callbacks(call):
+    data = call.data
+
+    if data == "cm_conservative":
+        pcm.choose_plan(call, "conservative")
+    elif data == "cm_balanced":
+        pcm.choose_plan(call, "balanced")
+    elif data == "cm_aggressive":
+        pcm.choose_plan(call, "aggressive")
+    elif data == "cm_info":
+        pcm.send_info(call)
 
 @bot.message_handler(func=lambda m: m.text and "🕒" in m.text)
 def market_hours(message):
@@ -881,53 +1107,18 @@ def news_callbacks(call):
     else:
         news.handle_callback(call)
 
-@bot.message_handler(func=lambda m: m.text and "📐" in m.text)
+@bot.message_handler(func=lambda m: m.text and t("tool_position_size", user_data.get(m.chat.id,{}).get("language","ar")) in m.text)
 def open_tool_ps(message):
     psc.open_market_menu(message)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith(("ps_",)))
 def handle_ps_callbacks(call):
     data = call.data
-
-    # اختيار السوق
-    if data.startswith("ps_m_"):
-        market = data.replace("ps_m_", "")
-        psc.open_form(call, market)
-
-    # اختيار الحقول
-    elif data == "ps_f_balance":
-        psc.ask_for_input(call, "balance")
-    elif data == "ps_f_risk":
-        psc.ask_for_input(call, "risk")
-    elif data == "ps_f_entry":
-        psc.ask_for_input(call, "entry")
-    elif data == "ps_f_sl":
-        psc.ask_for_input(call, "sl")
-
-    # الحساب
+    if data.startswith("ps_") and data != "ps_calc":
+        market = data.replace("ps_","")
+        psc.start_form(call, market)
     elif data == "ps_calc":
         psc.calculate(call)
-
-    # المثال
-    elif data == "ps_example":
-        psc.send_example(call)
-
-@bot.message_handler(func=lambda m: m.text and "🛡️" in m.text)
-def open_capital_mng(message):
-    pcm.open_menu(message)
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith(("cm_",)))
-def handle_cm_callbacks(call):
-    data = call.data
-
-    if data == "cm_conservative":
-        pcm.choose_plan(call, "conservative")
-    elif data == "cm_balanced":
-        pcm.choose_plan(call, "balanced")
-    elif data == "cm_aggressive":
-        pcm.choose_plan(call, "aggressive")
-    elif data == "cm_info":
-        pcm.send_info(call)
 
 @bot.message_handler(func=lambda message: message.text in [
     t("support_btn", "ar"), t("support_btn", "en"), t("support_btn", "ru")
@@ -1002,6 +1193,7 @@ def trading_section(message):
         t("trading_active_signals_btn", lang),
     )
     markup.add(
+        t("trading_stats_btn", lang),
         t("trading_channel_btn", lang)
     )
     markup.add(
@@ -1012,39 +1204,13 @@ def trading_section(message):
 
     bot.send_message(user_id, t("trading_section_welcome", lang), reply_markup=markup)
 
-@bot.message_handler(func=lambda message: message.text in ["❓ شرح قسم التداول", "❓ Trading Guide", "❓ О разделе трейдинга"])
-def trading_help(message):
-    user_id = message.chat.id
-    lang = user_data.get(user_id, {}).get("language", "ar")
-
-    help_text = {
-        "ar": (
-            "📘 *شرح قسم التداول:*\n\n"
-            "🔹 *التوصيات الجارية*: هنا بتلاقي الفرص المفتوحة مع نقاط الدخول والخروج.\n"
-            "🔹 *إدارة رأس المال*: إزاي تحدد حجم الصفقة المناسب لرصيدك.\n"
-            "🔹 *معدل المخاطرة*: ننصحك متخاطرش بأكتر من 20% من رأس المال في الصفقة.\n"
-            "🔹 *توضيح الإشارات*: كل توصية بيكون معاها *هدف* و *وقف خسارة*.\n\n"
-            "⚡️ هدفنا نوفرلك قرارات تداول أوضح وأسهل."
-        ),
-        "en": (
-            "📘 *Trading Section Guide:*\n\n"
-            "🔹 *Active Signals*: Shows open opportunities with entry/exit points.\n"
-            "🔹 *Capital Management*: How to calculate the right lot size.\n"
-            "🔹 *Risk Ratio*: Never risk more than 20% per trade.\n"
-            "🔹 *Signal Explanation*: Each signal includes *Take Profit* and *Stop Loss*.\n\n"
-            "⚡️ Our goal is to make trading decisions clearer and easier."
-        ),
-        "ru": (
-            "📘 *Раздел торговли:*\n\n"
-            "🔹 *Активные сигналы*: Открытые возможности с точками входа/выхода.\n"
-            "🔹 *Управление капиталом*: Как рассчитать правильный размер сделки.\n"
-            "🔹 *Риск*: Не рискуйте более 20% капитала на сделку.\n"
-            "🔹 *Сигналы*: Каждый сигнал содержит *Take Profit* и *Stop Loss*.\n\n"
-            "⚡️ Наша цель — сделать торговлю проще и понятнее."
-        )
-    }
-
-    bot.send_message(user_id, help_text[lang], parse_mode="Markdown")
+@bot.message_handler(func=lambda message: message.text in [
+    t("analysis_center_btn", "ar"), t("analysis_center_btn", "en"), t("analysis_center_btn", "ru"),
+    t("analyst_mode_btn", "ar"), t("analyst_mode_btn", "en"), t("analyst_mode_btn", "ru")
+])
+def handle_maintenance_buttons(message):
+    lang = get_user_lang(message.chat.id)  # الدالة دي بتحدد لغة المستخدم
+    bot.reply_to(message, t("under_maintenance", lang))
 
 @bot.message_handler(func=lambda message: message.text in ["🔙 رجوع للقائمة الرئيسية", "🔙 Back to Main Menu", "🔙 Назад в главное меню"])
 def back_to_main_menu(message):
@@ -1080,6 +1246,40 @@ def trading_channel(message):
 ])
 def trading_contact(message):
     bot.send_message(message.chat.id, "للتواصل معنا مباشرة: https://t.me/Ahmed_afifi_trader")
+
+@bot.message_handler(func=lambda message: message.text in ["❓ شرح قسم التداول", "❓ Trading Guide", "❓ О разделе трейдинга"])
+def trading_help(message):
+    user_id = message.chat.id
+    lang = user_data.get(user_id, {}).get("language", "ar")
+
+    help_text = {
+        "ar": (
+            "📘 *شرح قسم التداول:*\n\n"
+            "🔹 *التوصيات الجارية*: هنا بتلاقي الفرص المفتوحة مع نقاط الدخول والخروج.\n"
+            "🔹 *إدارة رأس المال*: إزاي تحدد حجم الصفقة المناسب لرصيدك.\n"
+            "🔹 *معدل المخاطرة*: ننصحك متخاطرش بأكتر من 20% من رأس المال في الصفقة.\n"
+            "🔹 *توضيح الإشارات*: كل توصية بيكون معاها *هدف* و *وقف خسارة*.\n\n"
+            "⚡️ هدفنا نوفرلك قرارات تداول أوضح وأسهل."
+        ),
+        "en": (
+            "📘 *Trading Section Guide:*\n\n"
+            "🔹 *Active Signals*: Shows open opportunities with entry/exit points.\n"
+            "🔹 *Capital Management*: How to calculate the right lot size.\n"
+            "🔹 *Risk Ratio*: Never risk more than 20% per trade.\n"
+            "🔹 *Signal Explanation*: Each signal includes *Take Profit* and *Stop Loss*.\n\n"
+            "⚡️ Our goal is to make trading decisions clearer and easier."
+        ),
+        "ru": (
+            "📘 *Раздел торговли:*\n\n"
+            "🔹 *Активные сигналы*: Открытые возможности с точками входа/выхода.\n"
+            "🔹 *Управление капиталом*: Как рассчитать правильный размер сделки.\n"
+            "🔹 *Риск*: Не рискуйте более 20% капитала на сделку.\n"
+            "🔹 *Сигналы*: Каждый сигнал содержит *Take Profit* и *Stop Loss*.\n\n"
+            "⚡️ Наша цель — сделать торговлю проще и понятнее."
+        )
+    }
+
+    bot.send_message(user_id, help_text[lang], parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("signal_"))
 def show_signal_detail(call):
@@ -1120,6 +1320,108 @@ def set_currency(call):
         bot.send_message(user_id, "❌ لم يتم العثور على بياناتك.")
 
     bot.answer_callback_query(call.id)
+
+@bot.message_handler(func=lambda m: tg_int(m.chat.id) == tg_int(ADMIN_CHAT_ID) and admin_state.get(m.chat.id) is not None, content_types=['text'])
+def handle_admin_inputs(message):
+    admin_id = message.chat.id
+    state = admin_state.get(admin_id)
+    text = (message.text or "").strip()
+
+    if state == "awaiting_add_balance":
+        try:
+            uid_str, amount_str = text.split()
+            uid = tg_int(uid_str)
+            amount = float(amount_str)
+            user_data.setdefault(str(uid), {}).setdefault("balance", 0.0)
+            user_data[str(uid)]["balance"] = float(user_data[str(uid)]["balance"]) + amount
+            bot.send_message(admin_id, f"✅ تم إضافة {amount}$ إلى حساب {uid}.")
+            send_safe(uid, f"💰 تم إضافة {amount}$ إلى رصيدك من قبل الإدارة.")
+            save_data()
+        except Exception as e:
+            bot.send_message(admin_id, f"❌ تنسيق غير صحيح.\n{e}")
+
+    elif state == "awaiting_deduct_balance":
+        try:
+            uid_str, amount_str = text.split()
+            uid = tg_int(uid_str)
+            amount = float(amount_str)
+            user_data.setdefault(str(uid), {}).setdefault("balance", 0.0)
+            user_data[str(uid)]["balance"] = float(user_data[str(uid)]["balance"]) - amount
+            bot.send_message(admin_id, f"✅ تم خصم {amount}$ من حساب {uid}.")
+            send_safe(uid, f"💰 تم خصم {amount}$ من رصيدك من قبل الإدارة.")
+            save_data()
+        except Exception as e:
+            bot.send_message(admin_id, f"❌ تنسيق غير صحيح.\n{e}")
+
+    elif state == "awaiting_send_user":
+        # طريقتين:
+        # (أ) لو بعت ID ومسافة ورسالة
+        parts = text.split(" ", 1)
+        if len(parts) >= 2 and parts[0].isdigit():
+            try:
+                uid = tg_int(parts[0])
+                msg = parts[1]
+                ok, err = send_safe(uid, f"📬 رسالة من الإدارة:\n{msg}")
+                if ok:
+                    bot.send_message(admin_id, f"✅ تم إرسال الرسالة للمستخدم {uid}.")
+                else:
+                    bot.send_message(admin_id, f"❌ خطأ أثناء الإرسال للمستخدم {uid}: {err}")
+                admin_state.pop(admin_id, None)
+            except Exception as e:
+                bot.send_message(admin_id, f"❌ خطأ أثناء الإرسال: {e}")
+        else:
+            # (ب) لو مفيش ID: نتأكد هل سبق حدّدنا target من فورورد؟
+            if admin_temp.get(admin_id):
+                uid = admin_temp[admin_id]
+                ok, err = send_safe(uid, f"📬 رسالة من الإدارة:\n{text}")
+                if ok:
+                    bot.send_message(admin_id, f"✅ تم إرسال الرسالة للمستخدم {uid}.")
+                else:
+                    bot.send_message(admin_id, f"❌ خطأ أثناء الإرسال للمستخدم {uid}: {err}")
+                admin_temp.pop(admin_id, None)
+                admin_state.pop(admin_id, None)
+            else:
+                bot.send_message(
+                    admin_id,
+                    "ℹ️ لو مش هتكتب ID، ابعت Message Forward من حساب المستخدم هنا أولاً، "
+                    "وبعدها اكتب نص الرسالة."
+                )
+
+    elif state == "awaiting_broadcast":
+        if not text:
+            bot.send_message(admin_id, "❌ الرسالة فارغة.")
+        else:
+            sent, fails = 0, 0
+            for raw_uid in list(user_data.keys()):
+                ok, err = send_safe(raw_uid, f"📢 إعلان إداري:\n{text}")
+                if ok:
+                    sent += 1
+                    time.sleep(0.05)
+                else:
+                    fails += 1
+            bot.send_message(admin_id, f"✅ تم الإرسال إلى {sent} مستخدم.\n⚠️ تعذر الإرسال إلى {fails} مستخدم.")
+            admin_state.pop(admin_id, None)
+
+    elif state == "awaiting_add_package":
+        try:
+            name, amount, profit = text.split()
+            amount = int(amount)
+            profit = int(profit)
+            packages[name] = {"amount": amount, "profit": profit}
+            save_packages()
+            bot.send_message(admin_id, f"✅ تم إضافة الباقة: {name}")
+            save_data()
+        except Exception as e:
+            bot.send_message(admin_id, f"❌ تنسيق غير صحيح.\n{e}")
+
+    elif state == "awaiting_delete_package":
+        if text in packages:
+            del packages[text]
+            save_packages()
+            bot.send_message(admin_id, f"✅ تم حذف الباقة: {text}")
+        else:
+            bot.send_message(admin_id, "❌ لم يتم العثور على باقة بهذا الاسم.")
+        admin_state.pop(admin_id, None)
 
 @bot.message_handler(content_types=['photo'])
 def handle_payment_photo(message):
@@ -1178,12 +1480,10 @@ def handle_payment_text(message):
 
     # تجاهل أزرار القائمة الرئيسية
     if text in [
-        t("packages_btn", lang), t("withdraw_btn", lang),
+        t("packages_btn", lang), t("deposit_btn", lang), t("withdraw_btn", lang),
         t("balance_btn", lang), t("package_status_btn", lang), t("referral_btn", lang),
         t("support_btn", lang), t("trial_btn", lang), t("change_currency_btn", lang),
-        t("change_lang_btn", lang),
-        t("analysis_center_btn", lang), t("analyst_mode_btn", lang), t("deposit_btn", lang), t("invest_btn", lang),
-        t("trading_btn", lang), t("trading_assistant_btn", lang)
+        t("change_lang_btn", lang)
     ]:
         return
 
@@ -1269,49 +1569,55 @@ def handle_payment_text(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("admin_"))
 def handle_admin_actions(call):
-    action = call.data
-    user_id = call.message.chat.id
+    admin_id = call.message.chat.id
+    if tg_int(admin_id) != tg_int(ADMIN_CHAT_ID):
+        bot.answer_callback_query(call.id, "غير مُصرّح.")
+        return
 
-    lang = user_data.get(user_id, {}).get("language", "ar")
+    action = call.data
+    lang = user_data.get(str(admin_id), {}).get("language", "ar")
 
     if action == "admin_users":
         text = t("admin_users_list", lang) + "\n"
         for uid, data in user_data.items():
-            text += f"\nID: {uid} | {t('balance_btn', lang)}: {data['balance']}$ | {t('package_status_btn', lang)}: {data.get('profits', 0)}$"
-        bot.send_message(user_id, text)
+            bal = data.get("balance", 0)
+            prof = data.get("profits", 0)
+            text += f"\nID: {uid} | {t('balance_btn', lang)}: {bal}$ | {t('package_status_btn', lang)}: {prof}$"
+        bot.send_message(admin_id, text)
 
     elif action == "admin_add_balance":
-        admin_state[user_id] = "awaiting_add_balance"
-        time.sleep(0.5)
-        bot.send_message(user_id, "📥 أرسل ID المستخدم وقيمة الرصيد المطلوب إضافته، مثال: 123456789 10")
+        admin_state[admin_id] = "awaiting_add_balance"
+        bot.send_message(admin_id, "📥 أرسل: ID قيمة_الإضافة\nمثال: 123456789 10")
 
     elif action == "admin_deduct_balance":
-        admin_state[user_id] = "awaiting_deduct_balance"
-        time.sleep(0.5)
-        bot.send_message(user_id, "📤 أرسل ID المستخدم وقيمة الرصيد المطلوب خصمها، مثال: 123456789 5")
+        admin_state[admin_id] = "awaiting_deduct_balance"
+        bot.send_message(admin_id, "📤 أرسل: ID قيمة_الخصم\nمثال: 123456789 5")
 
     elif action == "admin_send_user":
-        admin_state[user_id] = "awaiting_send_user"
-        time.sleep(0.5)
-        bot.send_message(user_id, "✉️ أرسل ID المستخدم ثم الرسالة، مثال:\n123456789 مرحبًا بك!")
+        # تقدر تكتب "ID رسالة" مباشرة، أو تبعت فورورد من المستخدم أولًا
+        admin_state[admin_id] = "awaiting_send_user"
+        admin_temp.pop(admin_id, None)
+        bot.send_message(
+            admin_id,
+            "✉️ أرسل إحدى الطريقتين:\n"
+            "1) اكتب: ID ثم الرسالة (مثال: 123456789 أهلاً بك)\n"
+            "2) أو ابعتلي Message Forwarded من المستخدم الهدف، وبعدين هطلب منك نص الرسالة."
+        )
 
     elif action == "admin_broadcast":
-        admin_state[user_id] = "awaiting_broadcast"
-        time.sleep(0.5)
-        bot.send_message(user_id, "📢 أرسل الرسالة التي تريد إرسالها لجميع المستخدمين:")
+        admin_state[admin_id] = "awaiting_broadcast"
+        bot.send_message(admin_id, "📢 اكتب نص الإعلان ليتم إرساله لجميع المستخدمين:")
 
     elif action == "admin_add_package":
-        admin_state[user_id] = "awaiting_add_package"
-        time.sleep(0.5)
-        bot.send_message(user_id, "📦 أرسل اسم الباقة والمبلغ والأرباح، مثال:\nباقة 1500$ 1500 7500")
+        admin_state[admin_id] = "awaiting_add_package"
+        bot.send_message(admin_id, "📦 اكتب: اسم_الباقة المبلغ الأرباح\nمثال: باقة1500 1500 7500")
 
     elif action == "admin_delete_package":
-        admin_state[user_id] = "awaiting_delete_package"
-        time.sleep(0.5)
-        bot.send_message(user_id, "❌ أرسل اسم الباقة التي تريد حذفها بالضبط:")
+        admin_state[admin_id] = "awaiting_delete_package"
+        bot.send_message(admin_id, "❌ اكتب اسم الباقة المراد حذفها بالضبط:")
 
     else:
-        bot.send_message(user_id, t("admin_invalid_format", lang))
+        bot.send_message(admin_id, t("admin_invalid_format", lang))
 
     bot.answer_callback_query(call.id)
 

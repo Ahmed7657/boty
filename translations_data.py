@@ -287,4 +287,27 @@ translations = {
         "en": "⚠️ Invalid data.\n- Capital must be greater than zero.\n- Target must be higher than capital.\n- Daily return must be above zero.",
         "ru": "⚠️ Неверные данные.\n- Капитал должен быть больше нуля.\n- Цель должна быть выше капитала.\n- Доходность должна быть больше нуля.",
     },
+
+    "under_maintenance": {
+        "ar": "هذا القسم تحت الصيانة ⚒️",
+        "en": "This section is under maintenance ⚒️",
+        "ru": "Этот раздел на техническом обслуживании ⚒️",
+        },
+
+    "ar": {
+        "analysis_center_btn": "مركز التحليل",
+        "analyst_mode_btn": "وضع المحلل",
+        "under_maintenance": "هذا القسم تحت الصيانة ⚒️"
+    },
+    "en": {
+        "analysis_center_btn": "Analysis Center",
+        "analyst_mode_btn": "Analyst Mode",
+        "under_maintenance": "This section is under maintenance ⚒️"
+    },
+    "ru": {
+        "analysis_center_btn": "Центр анализа",
+        "analyst_mode_btn": "Режим аналитика",
+        "under_maintenance": "Этот раздел на техническом обслуживании ⚒️"
+    },
+
 }
